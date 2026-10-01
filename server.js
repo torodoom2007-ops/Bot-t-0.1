@@ -1,60 +1,45 @@
-require('dotenv').config();
 const express = require('express');
 const TelegramBot = require('node-telegram-bot-api');
 
+// --- הגדרות ---
+const PORT = process.env.PORT || 3000;
+const TOKEN = process.env.BOT_TOKEN;
+const SUPER_ADMIN_ID = process.env.SUPER_ADMIN_ID || "8017590244";
+
+// --- שרת Express קטן עבור Render (כדי שRender לא יסגור את השרת) ---
 const app = express();
 app.use(express.json());
 
-// --- הגדרות משתנים ---
-const PORT = process.env.PORT || 3000;
-const TOKEN = process.env.BOT_TOKEN;
-const WEBHOOK_URL = process.env.WEBHOOK_URL;
-const SUPER_ADMIN_ID = process.env.SUPER_ADMIN_ID || "8017590244";
+app.get('/', (req, res) => {
+  res.send('🛡️ NodeX Shield Bot is Active and Running!');
+});
 
-// --- שמירת נתונים בזיכרון (In-Memory Storage) ---
-const userActivity = new Map(); // זיהוי הצפה (userId -> timestamps)
-const warnings = new Map();     // מעקב אזהרות (userId -> count)
-const spammersList = new Set(); // רשימה שחורה של ספאמרים
+app.listen(PORT, () => {
+  console.log(`NodeX Shield web server running on port ${PORT}`);
+});
 
-// --- טקסטים של המערכת (ניתנים לעריכה בזמן אמת על ידי ה-Super Admin) ---
+// --- אתחול הבוט במצב Polling (הכי יציב ובלי קונפליקטים) ---
+const bot = new TelegramBot(TOKEN, { polling: true });
+
+// --- זיכרון פנימי ---
+const userActivity = new Map(); // בדיקת הצפה (10 הודעות / 5 שניות)
+const warnings = new Map();     // אזהרות
+const spammersList = new Set(); // רשימת ספאמרים
+
+// --- טקסטים מותאמים ---
 const systemTexts = {
-  welcome: "🛡️ **NodeX Shield** פועל בקבוצה זו.\n*ההגנה החכמה לקהילה שלך.*",
+  welcome: "🛡️ **NodeX Shield** פועל בקבוצה זו.\n*NodeX | Smart Shield for Your Community.*",
   spamWarning: "⚠️ @{username}, נא לא להציף! אזהרה ({warnCount}/3).",
-  spammerBanned: "🚫 @{username} הוגדר כספאמר ואוגר ברשימה השחורה של NodeX."
+  spammerBanned: "🚫 @{username} הוגדר כספאמר ואוגר ברשימה השחורה."
 };
 
-// --- אתחול הבוט (תמיכה ב-Polling לפיתוח ו-Webhook ל-Render) ---
-let bot;
-if (process.env.NODE_ENV === 'production' && WEBHOOK_URL) {
-  bot = new TelegramBot(TOKEN);
-  bot.setWebHook(`${WEBHOOK_URL}/bot${TOKEN}`);
-} else {
-  bot = new TelegramBot(TOKEN, { polling: true });
-}
-
-// ==========================================
-// 🛠️ פונקציות עזר (UI & Process Simulation)
-// ==========================================
-
+// פונקציית השהייה (דימוי חשיבה)
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// הדמיית "הליך חשיבה" באמצעות עריכת הודעה
-async function showThinkingProcess(chatId, initialText, steps, delayMs = 500) {
-  const msg = await bot.sendMessage(chatId, `⏳ ${initialText}`, { parse_mode: 'Markdown' });
-  for (const step of steps) {
-    await sleep(delayMs);
-    try {
-      await bot.editMessageText(`⚡ ${step}`, { chat_id: chatId, message_id: msg.message_id, parse_mode: 'Markdown' });
-    } catch (e) {}
-  }
-  await sleep(delayMs);
-  return msg;
-}
-
 // שליחת הודעה זמנית שנמחקת אוטומטית
-async function sendAutoDeleteMessage(chatId, text, options = {}, delayMs = 4000) {
+async function sendAutoDeleteMessage(chatId, text, delayMs = 4000) {
   try {
-    const msg = await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', ...options });
+    const msg = await bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
     setTimeout(async () => {
       try {
         await bot.deleteMessage(chatId, msg.message_id);
@@ -63,19 +48,15 @@ async function sendAutoDeleteMessage(chatId, text, options = {}, delayMs = 4000)
   } catch (e) {}
 }
 
-// ==========================================
-// 🧹 מנוע ניקוי קישורים וקרדיטים
-// ==========================================
-
+// ניקוי טקסט מקישורים וקרדיטים
 function cleanTextContent(text) {
   if (!text) return "";
-  // ניקוי כתובות URL
   let cleaned = text.replace(/(https?:\/\/[^\s]+)|(www\.[^\s]+)|(t\.me\/[^\s]+)/gi, '[קישור הוסר]');
-  // ניקוי אזכורי Username (@)
   cleaned = cleaned.replace(/@[a-zA-Z0-9_]+/g, '[יוזרניימ הוסר]');
   return cleaned;
 }
 
+// בדיקה אם ההודעה מכילה קישורים או מוזכרים
 function containsForbiddenLinks(msg) {
   if (msg.entities || msg.caption_entities) {
     const entities = msg.entities || msg.caption_entities;
@@ -85,6 +66,7 @@ function containsForbiddenLinks(msg) {
   return /(https?:\/\/|www\.|t\.me\/|@[a-zA-Z0-9_]+)/i.test(rawText);
 }
 
+// ניהול ניקוי ופרסום מחדש
 async function handleLinkCleaning(msg) {
   if (!containsForbiddenLinks(msg)) return false;
 
@@ -94,10 +76,7 @@ async function handleLinkCleaning(msg) {
   const sender = msg.from.first_name || "משתמש";
 
   try {
-    // מחיקת ההודעה המקורית המכילה קישור/קרדיט
     await bot.deleteMessage(chatId, msg.message_id);
-
-    // פרסום מחדש של הטקסט הנקי
     if (cleanedText.trim().length > 0) {
       await bot.sendMessage(
         chatId,
@@ -112,10 +91,7 @@ async function handleLinkCleaning(msg) {
   }
 }
 
-// ==========================================
-// 🚨 מנוע הגנת ספאם (Rate Limit)
-// ==========================================
-
+// ניהול הגנת הצפה (10 הודעות ב-5 שניות)
 async function processSpamCheck(msg) {
   const userId = msg.from.id;
   const chatId = msg.chat.id;
@@ -125,13 +101,11 @@ async function processSpamCheck(msg) {
   const timestamps = userActivity.get(userId);
   timestamps.push(now);
 
-  // סינון הודעות מ-5 השניות האחרונות בלבד
   const recent = timestamps.filter(t => now - t <= 5000);
   userActivity.set(userId, recent);
 
-  // בדיקת חריגה מ-10 הודעות ב-5 שניות
   if (recent.length > 10) {
-    userActivity.set(userId, []); // איפוס
+    userActivity.set(userId, []);
     const currentWarns = (warnings.get(userId) || 0) + 1;
     warnings.set(userId, currentWarns);
 
@@ -146,47 +120,41 @@ async function processSpamCheck(msg) {
       }));
 
       const text = systemTexts.spammerBanned.replace('{username}', username);
-      await sendAutoDeleteMessage(chatId, text, {}, 7000);
+      await sendAutoDeleteMessage(chatId, text, 7000);
     } else {
       const text = systemTexts.spamWarning
         .replace('{username}', username)
         .replace('{warnCount}', currentWarns);
-      await sendAutoDeleteMessage(chatId, text, {}, 5000);
+      await sendAutoDeleteMessage(chatId, text, 5000);
     }
     return true;
   }
   return false;
 }
 
-// ייצוא רשימת ספאמרים מסודרת
+// ייצוא רשימת ספאמרים
 function exportSpammers() {
   const list = Array.from(spammersList).map(item => JSON.parse(item));
   if (list.length === 0) return "📋 **רשימת הספאמרים ריקה.**";
 
-  let report = "🚨 **NodeX Shield - רשימת ספאמרים שחורה:**\n\n";
+  let report = "🚨 **NodeX Shield - רשימת ספאמרים:**\n\n";
   list.forEach((s, idx) => {
     report += `${idx + 1}. ID: \`${s.id}\` | Username: @${s.username} | Name: ${s.name}\n`;
   });
   return report;
 }
 
-// ==========================================
-// ⚙️ ממשק ניהול ועריכה ל-SUPER_ADMIN_ID
-// ==========================================
-
+// כפתור עריכה בלעדי ל-Super Admin
 function getAdminKeyboard(userId, textKey) {
   if (String(userId) !== String(SUPER_ADMIN_ID)) return null;
   return {
     inline_keyboard: [
-      [{ text: "✏️ ערוך טקסט זה (NodeX Master)", callback_data: `edit_text_${textKey}` }]
+      [{ text: "✏️ ערוך טקסט זה (NodeX Admin)", callback_data: `edit_${textKey}` }]
     ]
   };
 }
 
-// ==========================================
-// 🤖 אירועי בוט ו-Handlers
-// ==========================================
-
+// --- מאזין להודעות נכנסות ---
 bot.on('message', async (msg) => {
   if (!msg.chat) return;
 
@@ -203,54 +171,40 @@ bot.on('message', async (msg) => {
     });
   }
 
-  // פקודת ייצוא ספאמרים (רק ל-SUPER_ADMIN)
+  // פקודת ייצוא ספאמרים (רק ל-ID של המנהל)
   if (text === '/spammers' && String(userId) === String(SUPER_ADMIN_ID)) {
-    const thinkingMsg = await showThinkingProcess(chatId, "מעבד נתונים...", ["שולף רשימה...", "מייצר פלט מסודר..."]);
-    await bot.deleteMessage(chatId, thinkingMsg.message_id);
+    const thinkingMsg = await bot.sendMessage(chatId, "⏳ *מייצר דוח ספאמרים...*", { parse_mode: 'Markdown' });
+    await sleep(800);
+    try { await bot.deleteMessage(chatId, thinkingMsg.message_id); } catch (e) {}
 
     const report = exportSpammers();
     return bot.sendMessage(chatId, report, { parse_mode: 'Markdown' });
   }
 
-  // 1. בדיקת ספאם (הצפה)
+  // 1. הגנת ספאם
   const isSpam = await processSpamCheck(msg);
   if (isSpam) return;
 
-  // 2. ניקוי קישורים ופרסום מחדש
+  // 2. ניקוי קישורים
   await handleLinkCleaning(msg);
 });
 
-// טיפול בלחיצות על כפתורי עריכה ל-Admin
+// לחיצות אינליין לאדמין
 bot.on('callback_query', async (query) => {
   const userId = query.from.id;
   if (String(userId) !== String(SUPER_ADMIN_ID)) {
-    return bot.answerCallbackQuery(query.id, { text: "אין לך הרשאה לבצע פעולה זו.", show_alert: true });
+    return bot.answerCallbackQuery(query.id, { text: "אין הרשאה", show_alert: true });
   }
 
-  if (query.data.startsWith('edit_text_')) {
-    const key = query.data.replace('edit_text_', '');
+  if (query.data.startsWith('edit_')) {
+    const key = query.data.replace('edit_', '');
     await bot.sendMessage(
       query.message.chat.id,
-      `✍️ כדי לערוך את המשתנה \`${key}\`, עדכן אותו ישירות בקוד או הגדר אותו במשתני הסביבה.\n\nטקסט נוכחי:\n"${systemTexts[key]}"`,
+      `✍️ **עריכת טקסט (${key}):**\nהטקסט כעת:\n"${systemTexts[key]}"`,
       { parse_mode: 'Markdown' }
     );
     bot.answerCallbackQuery(query.id);
   }
 });
 
-// ==========================================
-// 🌐 Express Webhook & Server Setup
-// ==========================================
-
-app.post(`/bot${TOKEN}`, (req, res) => {
-  bot.processUpdate(req.body);
-  res.sendStatus(200);
-});
-
-app.get('/', (req, res) => {
-  res.send('NodeX Shield Bot is online and running!');
-});
-
-app.listen(PORT, () => {
-  console.log(`NodeX Shield Server running on port ${PORT}`);
-});
+console.log('NodeX Shield script loaded successfully.');
