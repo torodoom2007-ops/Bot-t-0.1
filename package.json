@@ -1,23 +1,15 @@
 {
-  "name": "tg-automation-platform",
-  "version": "2.0.0",
-  "private": true,
-  "main": "src/index.js",
-  "engines": { "node": ">=18.17" },
+  "name": "telegram-multitool-bot",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "module",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "node --watch src/index.js",
-    "db:init": "node src/db/init.js"
+    "start": "node index.js"
   },
   "dependencies": {
-    "bottleneck": "^2.19.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "express-rate-limit": "^7.4.0",
-    "helmet": "^7.1.0",
-    "node-cron": "^3.0.3",
-    "pg": "^8.12.0",
-    "rss-parser": "^3.13.0",
-    "telegraf": "^4.16.3"
+    "node-fetch": "^3.3.2",
+    "xml2js": "^0.6.2"
   }
 }
